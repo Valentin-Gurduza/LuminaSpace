@@ -1,0 +1,6 @@
+{
+  "name": "LuminaSpace - 2D/3D Room Designer & Lighting Studio",
+  "description": "Interactive 2D floorplan and 3D room designer with real-time lighting previews, drag-and-drop furniture catalog, customizable materials, and day-night simulations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
