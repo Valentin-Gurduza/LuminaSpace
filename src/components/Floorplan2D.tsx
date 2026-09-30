@@ -8,6 +8,7 @@ interface Floorplan2DProps {
   selectedFurnitureId: string | null;
   onSelectFurniture: (id: string | null) => void;
   onUpdateFurniture: (updatedItem: PlacedFurniture) => void;
+  onEditStart: () => void;
   onDropNewItem?: (catalogId: string, x: number, z: number) => void;
   gridSnap: number;
 }
@@ -19,6 +20,7 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
   selectedFurnitureId,
   onSelectFurniture,
   onUpdateFurniture,
+  onEditStart,
   onDropNewItem,
   gridSnap,
 }) => {
@@ -71,11 +73,12 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
   // MOUSE & POINTER HANDLERS
   // ---------------------------------------------------------------
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (e.button === 1 || e.button === 2 || (e.button === 0 && e.target === containerRef.current)) {
+    if (e.button === 1 || e.button === 2 || e.button === 0) {
       // Pan background
       setIsPanning(true);
+      containerRef.current?.setPointerCapture(e.pointerId);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-      if (e.target === containerRef.current) {
+      if (e.button === 0) {
         onSelectFurniture(null);
       }
     }
@@ -100,8 +103,7 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
         const itemCenterScreenY = pan.y + mToPx(currentItem.z);
         const deltaX = e.clientX - (containerRef.current?.getBoundingClientRect().left || 0) - itemCenterScreenX;
         const deltaY = e.clientY - (containerRef.current?.getBoundingClientRect().top || 0) - itemCenterScreenY;
-        let deg = (Math.atan2(deltaY, deltaX) * 180) / Math.PI + 90;
-        if (deg < 0) deg += 360;
+        let deg = (-(Math.atan2(deltaY, deltaX) * 180) / Math.PI - 90 + 360) % 360;
 
         // 15-degree snap
         if (e.shiftKey) {
@@ -123,12 +125,6 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
           newX = Math.round(newX / gridSnap) * gridSnap;
           newZ = Math.round(newZ / gridSnap) * gridSnap;
         }
-
-        // Clamp inside room
-        const halfW = roomSettings.width / 2 - currentItem.dimensions.width / 2;
-        const halfL = roomSettings.length / 2 - currentItem.dimensions.depth / 2;
-        newX = Math.max(-halfW, Math.min(halfW, newX));
-        newZ = Math.max(-halfL, Math.min(halfL, newZ));
 
         onUpdateFurniture({
           ...currentItem,
@@ -176,11 +172,6 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
       z = Math.round(z / gridSnap) * gridSnap;
     }
 
-    const halfW = roomSettings.width / 2 - 0.4;
-    const halfL = roomSettings.length / 2 - 0.4;
-    x = Math.max(-halfW, Math.min(halfW, x));
-    z = Math.max(-halfL, Math.min(halfL, z));
-
     onDropNewItem(catalogId, x, z);
   };
 
@@ -194,6 +185,8 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+      style={{ touchAction: 'none' }}
       onWheel={handleWheel}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -241,6 +234,7 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
 
         {/* Global Background Grid */}
         <rect
+          data-export-ignore
           x="0"
           y="0"
           width="100%"
@@ -250,7 +244,7 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
         />
 
         {/* Room Group centered at pan coordinates */}
-        <g transform={`translate(${pan.x}, ${pan.y})`}>
+        <g data-floorplan-room transform={`translate(${pan.x}, ${pan.y})`}>
           {/* Floor Interior Plate */}
           <rect
             x={-roomPxW / 2}
@@ -275,7 +269,7 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
                 strokeDasharray="4 3"
               />
               <polygon
-                points="0,-roomPxL/2-5 -4,-roomPxL/2-14 4,-roomPxL/2-14"
+                points={`0,${-roomPxL / 2 - 5} -4,${-roomPxL / 2 - 14} 4,${-roomPxL / 2 - 14}`}
                 fill="#F59E0B"
               />
               <text
@@ -293,8 +287,8 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
 
           {/* Furniture Elements */}
           {furniture.map((item) => {
-            const itemPxW = mToPx(item.dimensions.width);
-            const itemPxD = mToPx(item.dimensions.depth);
+            const itemPxW = mToPx(item.dimensions.width * item.scaleX);
+            const itemPxD = mToPx(item.dimensions.depth * item.scaleZ);
             const itemScreenX = mToPx(item.x);
             const itemScreenZ = mToPx(item.z);
             const isSelected = item.id === selectedFurnitureId;
@@ -302,9 +296,11 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
             return (
               <g
                 key={item.id}
-                transform={`translate(${itemScreenX}, ${itemScreenZ}) rotate(${item.rotation})`}
+                transform={`translate(${itemScreenX}, ${itemScreenZ}) rotate(${-item.rotation})`}
                 onPointerDown={(e) => {
                   e.stopPropagation();
+                  containerRef.current?.setPointerCapture(e.pointerId);
+                  onEditStart();
                   onSelectFurniture(item.id);
                   setDragState({
                     itemId: item.id,
@@ -321,6 +317,8 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
                 {/* Light radius indicator if fixture */}
                 {item.isLightSource && item.lightEnabled !== false && (
                   <circle
+                    data-export-ignore
+                    pointerEvents="none"
                     cx="0"
                     cy="0"
                     r={mToPx((item.lightConfig?.distance || 5) * 0.45)}
@@ -395,6 +393,8 @@ export const Floorplan2D: React.FC<Floorplan2DProps> = ({
                       className="cursor-pointer"
                       onPointerDown={(e) => {
                         e.stopPropagation();
+                        containerRef.current?.setPointerCapture(e.pointerId);
+                        onEditStart();
                         setDragState({
                           itemId: item.id,
                           isRotating: true,

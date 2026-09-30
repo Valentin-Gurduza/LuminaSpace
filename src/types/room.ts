@@ -110,3 +110,9 @@ export interface RoomPreset {
   lighting: LightingEnvironment;
   furniture: PlacedFurniture[];
 }
+
+export interface RoomLayout {
+  roomSettings: RoomSettings;
+  lighting: LightingEnvironment;
+  furniture: PlacedFurniture[];
+}

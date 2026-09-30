@@ -1,7 +1,8 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { X, Check, Download, Upload, Sparkles, Box } from 'lucide-react';
 import { RoomPreset, RoomSettings, LightingEnvironment, PlacedFurniture } from '../types/room';
 import { ROOM_PRESETS } from '../data/roomPresets';
+import { MAX_LAYOUT_BYTES, parseLayout } from '../utils/layout';
 
 interface PresetsModalProps {
   isOpen: boolean;
@@ -27,6 +28,7 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
   currentLayout,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -47,21 +49,24 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
+    setImportError(null);
+    if (file.size > MAX_LAYOUT_BYTES) {
+      setImportError('Layout files must be smaller than 2 MB.');
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const parsed = JSON.parse(event.target?.result as string);
-        if (parsed.roomSettings && parsed.furniture) {
-          onImportLayout(parsed);
-          onClose();
-        } else {
-          alert('Invalid layout file format.');
-        }
+        const parsed = parseLayout(event.target?.result as string);
+        onImportLayout(parsed);
+        onClose();
       } catch (err) {
-        alert('Could not parse JSON file.');
+        setImportError(err instanceof Error ? err.message : 'Could not read the layout.');
       }
     };
+    reader.onerror = () => setImportError('Could not read the selected file.');
     reader.readAsText(file);
   };
 
@@ -88,6 +93,7 @@ export const PresetsModal: React.FC<PresetsModalProps> = ({
 
         {/* Content list */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {importError && <p role="alert" className="rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm text-red-200">{importError}</p>}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {ROOM_PRESETS.map((preset) => (
               <div
