@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import { ViewMode, RoomSettings, LightingEnvironment, PlacedFurniture, RoomPreset } from './types/room';
 import { ROOM_PRESETS } from './data/roomPresets';
 import { FURNITURE_CATALOG } from './data/furnitureCatalog';
-import { LIGHTING_PRESETS } from './data/lightingPresets';
+import { createHistory, historyReducer } from './utils/history';
+import { captureScene } from './utils/captureScene';
+import { clampFurniture } from './utils/layout';
 import { TopNavbar } from './components/TopNavbar';
 import { CatalogSidebar } from './components/CatalogSidebar';
 import { InspectorSidebar } from './components/InspectorSidebar';
@@ -22,53 +24,72 @@ export default function App() {
   const initialPreset = ROOM_PRESETS[0];
 
   const [viewMode, setViewMode] = useState<ViewMode>('3d-orbit');
-  const [roomSettings, setRoomSettings] = useState<RoomSettings>(initialPreset.roomSettings);
-  const [lighting, setLighting] = useState<LightingEnvironment>(initialPreset.lighting);
-  const [furniture, setFurniture] = useState<PlacedFurniture[]>(initialPreset.furniture);
+  const [history, dispatchHistory] = useReducer(historyReducer, initialPreset, preset => createHistory({ roomSettings: preset.roomSettings, lighting: preset.lighting, furniture: preset.furniture.map(item => clampFurniture(item, preset.roomSettings)) }));
+  const { roomSettings, lighting, furniture } = history.present;
+  const viewportRef = useRef<HTMLElement>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null);
 
   const [gridSnap, setGridSnap] = useState<number>(0.25);
   const [cutawayFrontWall, setCutawayFrontWall] = useState<boolean>(true);
 
   // Sidebars visibility
-  const [isCatalogOpen, setIsCatalogOpen] = useState<boolean>(true);
-  const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(true);
+  const [isCatalogOpen, setIsCatalogOpen] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
+  const [isInspectorOpen, setIsInspectorOpen] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
 
   // Modals
   const [isPresetsModalOpen, setIsPresetsModalOpen] = useState<boolean>(false);
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
 
-  // History stack for Undo / Redo
-  const [history, setHistory] = useState<PlacedFurniture[][]>([initialPreset.furniture]);
-  const [historyIndex, setHistoryIndex] = useState<number>(0);
+  const beginEdit = useCallback(() => dispatchHistory({ type: 'begin' }), []);
+  const commitEdit = useCallback(() => dispatchHistory({ type: 'commit' }), []);
+  const beginSceneEdit = useCallback(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.matches('input, textarea, select')) active.blur();
+    beginEdit();
+  }, [beginEdit]);
+  const handleUndo = useCallback(() => dispatchHistory({ type: 'undo' }), []);
+  const handleRedo = useCallback(() => dispatchHistory({ type: 'redo' }), []);
+  const setFurniture = (next: PlacedFurniture[]) => dispatchHistory({ type: 'update', update: layout => ({ ...layout, furniture: next }) });
+  const setRoomSettings = (next: RoomSettings) => dispatchHistory({ type: 'update', update: layout => ({ ...layout, roomSettings: next, furniture: layout.furniture.map(item => clampFurniture(item, next)) }) });
+  const setLighting = (next: LightingEnvironment) => dispatchHistory({ type: 'update', update: layout => ({ ...layout, lighting: next }) });
 
-  // Push new state to history
-  const pushHistory = useCallback(
-    (newFurniture: PlacedFurniture[]) => {
-      setHistory((prev) => {
-        const sliced = prev.slice(0, historyIndex + 1);
-        return [...sliced, newFurniture];
-      });
-      setHistoryIndex((prev) => prev + 1);
-    },
-    [historyIndex]
-  );
+  useEffect(() => {
+    const finishPointerEdit = () => {
+      if (!document.activeElement?.matches('input[type="number"], input[type="color"]')) commitEdit();
+    };
+    window.addEventListener('pointerup', finishPointerEdit);
+    window.addEventListener('pointercancel', finishPointerEdit);
+    window.addEventListener('blur', commitEdit);
+    const media = window.matchMedia('(min-width: 1024px)');
+    const resize = () => {
+      setIsCatalogOpen(media.matches);
+      setIsInspectorOpen(media.matches);
+    };
+    media.addEventListener('change', resize);
+    return () => {
+      window.removeEventListener('pointerup', finishPointerEdit);
+      window.removeEventListener('pointercancel', finishPointerEdit);
+      window.removeEventListener('blur', commitEdit);
+      media.removeEventListener('change', resize);
+    };
+  }, [commitEdit]);
 
-  const handleUndo = useCallback(() => {
-    if (historyIndex > 0) {
-      const prevIndex = historyIndex - 1;
-      setHistoryIndex(prevIndex);
-      setFurniture(history[prevIndex]);
+  const selectFurniture = (id: string | null) => {
+    setSelectedFurnitureId(id);
+    if (id && !window.matchMedia('(min-width: 1024px)').matches) {
+      setIsCatalogOpen(false);
+      setIsInspectorOpen(true);
     }
-  }, [historyIndex, history]);
-
-  const handleRedo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      const nextIndex = historyIndex + 1;
-      setHistoryIndex(nextIndex);
-      setFurniture(history[nextIndex]);
-    }
-  }, [historyIndex, history]);
+  };
+  const toggleCatalog = () => {
+    setIsCatalogOpen(open => !open);
+    if (!window.matchMedia('(min-width: 1024px)').matches) setIsInspectorOpen(false);
+  };
+  const toggleInspector = () => {
+    setIsInspectorOpen(open => !open);
+    if (!window.matchMedia('(min-width: 1024px)').matches) setIsCatalogOpen(false);
+  };
 
   // -----------------------------------------------------------------
   // FURNITURE OPERATIONS
@@ -100,21 +121,19 @@ export default function App() {
       isWallMounted: itemDef.isWallMounted,
     };
 
-    const nextFurniture = [...furniture, newItem];
+    const nextFurniture = [...furniture, clampFurniture(newItem, roomSettings)];
     setFurniture(nextFurniture);
-    pushHistory(nextFurniture);
-    setSelectedFurnitureId(newItem.id);
+    selectFurniture(newItem.id);
   };
 
   const handleUpdateFurniture = (updatedItem: PlacedFurniture) => {
-    const nextFurniture = furniture.map((f) => (f.id === updatedItem.id ? updatedItem : f));
+    const nextFurniture = furniture.map((f) => (f.id === updatedItem.id ? clampFurniture(updatedItem, roomSettings) : f));
     setFurniture(nextFurniture);
   };
 
   const handleDeleteFurniture = (id: string) => {
     const nextFurniture = furniture.filter((f) => f.id !== id);
     setFurniture(nextFurniture);
-    pushHistory(nextFurniture);
     if (selectedFurnitureId === id) {
       setSelectedFurnitureId(null);
     }
@@ -131,16 +150,14 @@ export default function App() {
       z: original.z + 0.35,
     };
 
-    const nextFurniture = [...furniture, duplicated];
+    const nextFurniture = [...furniture, clampFurniture(duplicated, roomSettings)];
     setFurniture(nextFurniture);
-    pushHistory(nextFurniture);
-    setSelectedFurnitureId(duplicated.id);
+    selectFurniture(duplicated.id);
   };
 
   const handleClearRoom = () => {
     if (window.confirm('Clear all furniture in the room?')) {
       setFurniture([]);
-      pushHistory([]);
       setSelectedFurnitureId(null);
     }
   };
@@ -190,59 +207,23 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedFurnitureId, handleUndo, handleRedo, furniture]);
 
-  // Load preset template
   const handleSelectPreset = (preset: RoomPreset) => {
-    setRoomSettings(preset.roomSettings);
-    setLighting(preset.lighting);
-    setFurniture(preset.furniture);
-    setHistory([preset.furniture]);
-    setHistoryIndex(0);
+    dispatchHistory({ type: 'replace', layout: { roomSettings: preset.roomSettings, lighting: preset.lighting, furniture: preset.furniture.map(item => clampFurniture(item, preset.roomSettings)) } });
     setSelectedFurnitureId(null);
   };
 
-  // Import custom JSON
-  const handleImportLayout = (data: {
-    roomSettings: RoomSettings;
-    lighting: LightingEnvironment;
-    furniture: PlacedFurniture[];
-  }) => {
-    setRoomSettings(data.roomSettings);
-    setLighting(data.lighting);
-    setFurniture(data.furniture);
-    setHistory([data.furniture]);
-    setHistoryIndex(0);
+  const handleImportLayout = (data: { roomSettings: RoomSettings; lighting: LightingEnvironment; furniture: PlacedFurniture[] }) => {
+    dispatchHistory({ type: 'replace', layout: data });
     setSelectedFurnitureId(null);
   };
 
-  // Take high-res snapshot of current 3D/2D canvas
-  const handleTakeSnapshot = () => {
-    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-    if (canvas) {
-      const dataUrl = canvas.toDataURL('image/png');
-      setSnapshotUrl(dataUrl);
-    } else {
-      // In 2D SVG mode, serialize SVG to canvas
-      const svg = document.querySelector('svg');
-      if (svg) {
-        const svgData = new XMLSerializer().serializeToString(svg);
-        const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-        const URL = window.URL || window.webkitURL || window;
-        const blobURL = URL.createObjectURL(svgBlob);
-        const image = new Image();
-        image.onload = () => {
-          const offscreenCanvas = document.createElement('canvas');
-          offscreenCanvas.width = svg.clientWidth || 1200;
-          offscreenCanvas.height = svg.clientHeight || 800;
-          const ctx = offscreenCanvas.getContext('2d');
-          if (ctx) {
-            ctx.fillStyle = '#0A0D14';
-            ctx.fillRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
-            ctx.drawImage(image, 0, 0);
-            setSnapshotUrl(offscreenCanvas.toDataURL('image/png'));
-          }
-        };
-        image.src = blobURL;
-      }
+  const handleTakeSnapshot = async () => {
+    if (!viewportRef.current) return;
+    setExportError(null);
+    try {
+      setSnapshotUrl(await captureScene(viewportRef.current));
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'Image export failed.');
     }
   };
 
@@ -250,38 +231,50 @@ export default function App() {
   const fixturesCount = furniture.filter((f) => f.isLightSource && f.lightEnabled !== false).length;
 
   return (
-    <div className="flex flex-col w-screen h-screen overflow-hidden bg-neutral-950 text-neutral-100 font-sans select-none">
+    <div
+      onPointerDownCapture={event => { if ((event.target as HTMLElement).matches('input[type="range"]')) beginEdit(); }}
+      onFocusCapture={event => { if (event.target.matches('input[type="number"], input[type="color"], input[type="range"]')) beginEdit(); }}
+      onBlurCapture={event => { if (event.target.matches('input[type="number"], input[type="color"], input[type="range"]')) commitEdit(); }}
+      onKeyDownCapture={event => { if ((event.target as HTMLElement).matches('input[type="range"]') && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) beginEdit(); }}
+      onKeyUpCapture={event => { if ((event.target as HTMLElement).matches('input[type="range"]')) commitEdit(); }}
+      className="flex flex-col w-screen h-dvh overflow-hidden bg-neutral-950 text-neutral-100 font-sans select-none">
       {/* Top Bar Contract (Wordmark - View Modes - Primary Actions) */}
       <TopNavbar
         viewMode={viewMode}
         onSetViewMode={setViewMode}
         onOpenPresets={() => setIsPresetsModalOpen(true)}
         onTakeSnapshot={handleTakeSnapshot}
-        canUndo={historyIndex > 0}
-        canRedo={historyIndex < history.length - 1}
+        canUndo={history.past.length > 0 || (!!history.editStart && history.present !== history.editStart)}
+        canRedo={history.future.length > 0}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onClearRoom={handleClearRoom}
       />
 
+      <div className="flex shrink-0 items-center gap-2 border-b border-neutral-800 bg-neutral-900 px-3 py-2 lg:hidden">
+        <button aria-expanded={isCatalogOpen} onClick={toggleCatalog} className="rounded bg-neutral-800 px-3 py-1.5 text-xs">Furniture</button>
+        <button aria-expanded={isInspectorOpen} onClick={toggleInspector} className="rounded bg-neutral-800 px-3 py-1.5 text-xs">Inspector</button>
+      </div>
+      {exportError && <div role="alert" className="bg-red-950 px-4 py-2 text-sm text-red-200">{exportError}</div>}
       {/* Main Workspace Body */}
-      <div className="relative flex-1 flex overflow-hidden">
+      <div className="relative min-h-0 flex-1 flex overflow-hidden">
         {/* Left Furniture & Lighting Catalog */}
         <CatalogSidebar
           isOpen={isCatalogOpen}
-          onToggleOpen={() => setIsCatalogOpen((prev) => !prev)}
+          onToggleOpen={toggleCatalog}
           onAddItem={(catalogId) => handleAddItem(catalogId, 0, 0)}
         />
 
         {/* Center Viewport Area */}
-        <main className="relative flex-1 h-full overflow-hidden bg-neutral-950">
+        <main ref={viewportRef} className="relative min-w-0 flex-1 h-full overflow-hidden bg-neutral-950">
           {viewMode === '2d-plan' ? (
             <Floorplan2D
               roomSettings={roomSettings}
               lighting={lighting}
               furniture={furniture}
               selectedFurnitureId={selectedFurnitureId}
-              onSelectFurniture={setSelectedFurnitureId}
+              onSelectFurniture={selectFurniture}
+              onEditStart={beginSceneEdit}
               onUpdateFurniture={handleUpdateFurniture}
               onDropNewItem={(catalogId, x, z) => handleAddItem(catalogId, x, z)}
               gridSnap={gridSnap}
@@ -293,7 +286,8 @@ export default function App() {
               lighting={lighting}
               furniture={furniture}
               selectedFurnitureId={selectedFurnitureId}
-              onSelectFurniture={setSelectedFurnitureId}
+              onSelectFurniture={selectFurniture}
+              onEditStart={beginSceneEdit}
               onUpdateFurniture={handleUpdateFurniture}
               onDropNewItem={(catalogId, x, z) => handleAddItem(catalogId, x, z)}
               gridSnap={gridSnap}
@@ -313,6 +307,7 @@ export default function App() {
           />
         </main>
 
+        {(isCatalogOpen || isInspectorOpen) && <button aria-label="Close panels" onClick={() => { setIsCatalogOpen(false); setIsInspectorOpen(false); }} className="absolute inset-0 z-20 bg-black/40 lg:hidden" />}
         {/* Right Inspector & Lighting Studio Sidebar */}
         <InspectorSidebar
           selectedFurniture={selectedFurniture}
@@ -326,7 +321,7 @@ export default function App() {
           onUpdateLighting={setLighting}
           furniture={furniture}
           isOpen={isInspectorOpen}
-          onToggleOpen={() => setIsInspectorOpen((prev) => !prev)}
+          onToggleOpen={toggleInspector}
           cutawayFrontWall={cutawayFrontWall}
           onToggleCutaway={() => setCutawayFrontWall((prev) => !prev)}
         />

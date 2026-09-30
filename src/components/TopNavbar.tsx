@@ -35,7 +35,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   onClearRoom,
 }) => {
   return (
-    <header className="relative z-30 flex items-center justify-between px-6 py-3.5 bg-neutral-900/90 border-b border-neutral-800 backdrop-blur-md shrink-0">
+    <header className="relative z-40 flex flex-wrap items-center justify-between gap-2 px-3 py-3 bg-neutral-900/90 border-b border-neutral-800 backdrop-blur-md shrink-0 lg:px-6">
       {/* Zone 1: Brand Wordmark (Single Text Element) */}
       <div className="flex items-center gap-3">
         <span className="text-lg font-bold tracking-tight text-neutral-100 font-display">
@@ -44,7 +44,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
       </div>
 
       {/* Zone 2: View Modes (Segmented Control, Single-Line) */}
-      <nav className="flex items-center gap-1 p-1 bg-neutral-950/80 rounded-lg border border-neutral-800">
+      <nav aria-label="View modes" className="order-3 flex w-full items-center gap-1 overflow-x-auto p-1 bg-neutral-950/80 rounded-lg border border-neutral-800 lg:order-none lg:w-auto">
         <button
           onClick={() => onSetViewMode('3d-orbit')}
           className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap transition-colors ${
@@ -96,7 +96,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
       {/* Zone 3: Primary Actions (1-2 main CTAs + quiet tool buttons) */}
       <div className="flex items-center gap-2">
         {/* Undo / Redo */}
-        <div className="hidden sm:flex items-center gap-1 border-r border-neutral-800 pr-2 mr-1">
+        <div className="flex items-center gap-1 border-r border-neutral-800 pr-2 mr-1">
           <button
             onClick={onUndo}
             disabled={!canUndo}
@@ -125,19 +125,21 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
         {/* Room Presets Modal Opener */}
         <button
           onClick={onOpenPresets}
+          aria-label="Templates"
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-200 bg-neutral-800 hover:bg-neutral-700/80 border border-neutral-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
         >
           <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
-          Templates
+          <span className="hidden sm:inline">Templates</span>
         </button>
 
         {/* Render Snapshot Button */}
         <button
           onClick={onTakeSnapshot}
+          aria-label="Export Render"
           className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-neutral-950 bg-amber-400 hover:bg-amber-300 rounded-lg shadow-sm transition-all whitespace-nowrap cursor-pointer hover:shadow-amber-500/20 hover:shadow-md"
         >
           <Camera className="w-3.5 h-3.5" />
-          Export Render
+          <span className="hidden sm:inline">Export Render</span>
         </button>
       </div>
     </header>

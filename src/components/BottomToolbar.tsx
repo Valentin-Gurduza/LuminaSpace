@@ -25,10 +25,10 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
   const roomAreaSqFt = ((roomSettings.width * roomSettings.length) * 10.7639).toFixed(0);
 
   return (
-    <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 max-w-full px-2 pointer-events-none">
+    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex w-full flex-col items-center gap-2 max-w-full px-2 pointer-events-none sm:bottom-5 sm:w-auto sm:flex-row">
       {/* Walkthrough Controls Guide (Only in first-person mode) */}
       {viewMode === 'first-person' && (
-        <div className="pointer-events-auto flex items-center gap-3 px-3.5 py-2 bg-neutral-900/90 border border-amber-500/30 rounded-xl backdrop-blur-md text-xs text-neutral-300 shadow-xl">
+        <div className="pointer-events-auto flex max-w-full flex-wrap justify-center items-center gap-2 px-3 py-2 bg-neutral-900/90 border border-amber-500/30 rounded-xl backdrop-blur-md text-xs text-neutral-300 shadow-xl">
           <div className="flex items-center gap-1 font-mono text-amber-400 font-semibold text-[11px]">
             <span className="px-1.5 py-0.5 bg-neutral-800 border border-neutral-700 rounded">W</span>
             <span className="px-1.5 py-0.5 bg-neutral-800 border border-neutral-700 rounded">A</span>
@@ -42,7 +42,7 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
       )}
 
       {/* Main HUD Bar */}
-      <div className="pointer-events-auto flex items-center gap-4 px-4 py-2 bg-neutral-900/90 border border-neutral-800/90 rounded-xl backdrop-blur-md text-xs shadow-2xl text-neutral-300">
+      <div className="pointer-events-auto flex max-w-full flex-wrap justify-center items-center gap-2 px-2 py-2 bg-neutral-900/90 border border-neutral-800/90 rounded-xl backdrop-blur-md text-xs shadow-2xl text-neutral-300 sm:gap-4 sm:px-4">
         {/* Grid Snap Control */}
         <div className="flex items-center gap-2 border-r border-neutral-800 pr-3">
           <Grid className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -70,7 +70,7 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
         </div>
 
         {/* Room Area Stats */}
-        <div className="flex items-center gap-3 text-neutral-400 font-mono text-[11px]">
+        <div className="flex items-center gap-2 whitespace-nowrap text-neutral-400 font-mono text-[11px] sm:gap-3">
           <span className="hidden md:inline">
             <strong className="text-neutral-200">{roomAreaM2}</strong> m² ({roomAreaSqFt} sq ft)
           </span>

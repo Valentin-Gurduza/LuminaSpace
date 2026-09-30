@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { ViewMode, RoomSettings, LightingEnvironment, PlacedFurniture } from '../types/room';
-import { getFloorMaterial, createWallTexture } from '../utils/proceduralTextures';
-import { buildFurniture3D } from '../utils/modelGenerators';
+import { getFloorMaterial, createWallTexture, clearTextureCache } from '../utils/proceduralTextures';
+import { disposeObject, syncFurniture } from '../utils/scene';
 
 interface Viewport3DProps {
   viewMode: ViewMode;
@@ -12,6 +12,7 @@ interface Viewport3DProps {
   selectedFurnitureId: string | null;
   onSelectFurniture: (id: string | null) => void;
   onUpdateFurniture: (updatedItem: PlacedFurniture) => void;
+  onEditStart: () => void;
   onDropNewItem?: (catalogId: string, x: number, z: number) => void;
   gridSnap: number; // 0, 0.1, 0.25, 0.5
   onScreenshotReady?: (dataUrl: string) => void;
@@ -26,12 +27,16 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   selectedFurnitureId,
   onSelectFurniture,
   onUpdateFurniture,
+  onEditStart,
   onDropNewItem,
   gridSnap,
   cutawayFrontWall = true,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const runtimeRef = useRef({ viewMode, roomSettings });
+  runtimeRef.current = { viewMode, roomSettings };
+  const requestRender = useRef<() => void>(() => {});
 
   // Three.js instances ref
   const threeRef = useRef<{
@@ -75,8 +80,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   useEffect(() => {
     if (!canvasRef.current || !containerRef.current) return;
 
-    const width = containerRef.current.clientWidth;
-    const height = containerRef.current.clientHeight;
+    const width = Math.max(1, containerRef.current.clientWidth);
+    const height = Math.max(1, containerRef.current.clientHeight);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color('#0A0D14');
@@ -181,56 +186,65 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       raycaster,
     };
 
-    // Animation render loop
-    let animationFrameId: number;
-    const animate = () => {
-      animationFrameId = requestAnimationFrame(animate);
-
-      // Smooth First-person walk movement if active
-      if (viewMode === 'first-person') {
-        const orbit = orbitRef.current;
-        const speed = 0.08;
-        const forward = new THREE.Vector3();
+    // Render only after a scene change, or while walkthrough keys are held.
+    let animationFrameId = 0;
+    let lastFrameTime = 0;
+    const forward = new THREE.Vector3();
+    const right = new THREE.Vector3();
+    const movementKeys = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+    const animate = (timestamp: number) => {
+      animationFrameId = 0;
+      if (document.hidden) return;
+      const { viewMode: mode, roomSettings: room } = runtimeRef.current;
+      const orbit = orbitRef.current;
+      const moving = mode === 'first-person' && movementKeys.some(key => orbit.keysPressed[key]);
+      if (moving) {
+        const speed = 3 * (lastFrameTime ? Math.min((timestamp - lastFrameTime) / 1000, 0.05) : 1 / 60);
         camera.getWorldDirection(forward);
         forward.y = 0;
         forward.normalize();
-
-        const right = new THREE.Vector3();
-        right.crossVectors(camera.up, forward).normalize();
-
-        if (orbit.keysPressed['KeyW'] || orbit.keysPressed['ArrowUp']) {
-          camera.position.addScaledVector(forward, speed);
-        }
-        if (orbit.keysPressed['KeyS'] || orbit.keysPressed['ArrowDown']) {
-          camera.position.addScaledVector(forward, -speed);
-        }
-        if (orbit.keysPressed['KeyA'] || orbit.keysPressed['ArrowLeft']) {
-          camera.position.addScaledVector(right, speed);
-        }
-        if (orbit.keysPressed['KeyD'] || orbit.keysPressed['ArrowRight']) {
-          camera.position.addScaledVector(right, -speed);
-        }
-
-        // Clamp camera position inside room bounds
-        const halfW = roomSettings.width / 2 - 0.3;
-        const halfL = roomSettings.length / 2 - 0.3;
+        right.crossVectors(forward, camera.up).normalize();
+        if (orbit.keysPressed['KeyW'] || orbit.keysPressed['ArrowUp']) camera.position.addScaledVector(forward, speed);
+        if (orbit.keysPressed['KeyS'] || orbit.keysPressed['ArrowDown']) camera.position.addScaledVector(forward, -speed);
+        if (orbit.keysPressed['KeyA'] || orbit.keysPressed['ArrowLeft']) camera.position.addScaledVector(right, -speed);
+        if (orbit.keysPressed['KeyD'] || orbit.keysPressed['ArrowRight']) camera.position.addScaledVector(right, speed);
+        const halfW = Math.max(0, room.width / 2 - 0.3);
+        const halfL = Math.max(0, room.length / 2 - 0.3);
         camera.position.x = Math.max(-halfW, Math.min(halfW, camera.position.x));
         camera.position.z = Math.max(-halfL, Math.min(halfL, camera.position.z));
-        camera.position.y = 1.6; // Eye height
+        camera.position.y = 1.6;
       }
-
+      lastFrameTime = moving ? timestamp : 0;
       renderer.render(scene, camera);
+      if (moving) schedule();
     };
-    animate();
+    const schedule = () => {
+      if (!animationFrameId && !document.hidden) animationFrameId = requestAnimationFrame(animate);
+    };
+    requestRender.current = schedule;
+    schedule();
+    const stopMovement = () => {
+      orbitRef.current.keysPressed = {};
+      lastFrameTime = 0;
+    };
+    const handleVisibility = () => {
+      stopMovement();
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = 0;
+      if (!document.hidden) schedule();
+    };
+    window.addEventListener('blur', stopMovement);
+    document.addEventListener('visibilitychange', handleVisibility);
 
     // Resize Handler
     const handleResize = () => {
       if (!containerRef.current || !threeRef.current) return;
-      const w = containerRef.current.clientWidth;
-      const h = containerRef.current.clientHeight;
+      const w = Math.max(1, containerRef.current.clientWidth);
+      const h = Math.max(1, containerRef.current.clientHeight);
       threeRef.current.camera.aspect = w / h;
       threeRef.current.camera.updateProjectionMatrix();
       threeRef.current.renderer.setSize(w, h);
+      schedule();
     };
 
     const resizeObserver = new ResizeObserver(handleResize);
@@ -239,7 +253,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
       resizeObserver.disconnect();
+      window.removeEventListener('blur', stopMovement);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      disposeObject(scene);
+      clearTextureCache();
       renderer.dispose();
+      threeRef.current = null;
+      requestRender.current = () => {};
     };
   }, []);
 
@@ -302,17 +322,14 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     // Update floor geometry & material
     floorMesh.geometry.dispose();
     floorMesh.geometry = new THREE.PlaneGeometry(roomSettings.width, roomSettings.length);
+    for (const material of Array.isArray(floorMesh.material) ? floorMesh.material : [floorMesh.material]) material.dispose();
     floorMesh.material = getFloorMaterial(roomSettings.floorMaterial, roomSettings.floorColorTint);
 
     // Update grid
     gridHelper.position.y = 0.002;
 
-    // Clear old walls
-    while (wallsGroup.children.length > 0) {
-      const child = wallsGroup.children[0] as THREE.Mesh;
-      if (child.geometry) child.geometry.dispose();
-      wallsGroup.remove(child);
-    }
+    disposeObject(wallsGroup);
+    wallsGroup.clear();
 
     const rw = roomSettings.width;
     const rl = roomSettings.length;
@@ -402,16 +419,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     if (!threeRef.current) return;
     const { furnitureGroup } = threeRef.current;
 
-    // Clear existing
-    while (furnitureGroup.children.length > 0) {
-      furnitureGroup.remove(furnitureGroup.children[0]);
-    }
-
-    // Build each item
-    furniture.forEach((item) => {
-      const meshGroup = buildFurniture3D(item, lighting.fixturesMasterSwitch);
-      furnitureGroup.add(meshGroup);
-    });
+    syncFurniture(furnitureGroup, furniture, lighting.fixturesMasterSwitch);
   }, [furniture, lighting.fixturesMasterSwitch]);
 
   // ---------------------------------------------------------------
@@ -430,7 +438,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     if (selectedItem) {
       selectionRing.visible = true;
       selectionRing.position.set(selectedItem.x, 0.015, selectedItem.z);
-      const maxDim = Math.max(selectedItem.dimensions.width, selectedItem.dimensions.depth);
+      const maxDim = Math.max(selectedItem.dimensions.width * selectedItem.scaleX, selectedItem.dimensions.depth * selectedItem.scaleZ);
       selectionRing.scale.set(maxDim * 0.7, maxDim * 0.7, 1);
     } else {
       selectionRing.visible = false;
@@ -466,6 +474,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       updateCameraFromOrbit();
     } else if (viewMode === 'first-person') {
       // Placed inside room
+      camera.rotation.order = 'YXZ';
       camera.position.set(0, 1.6, roomSettings.length * 0.3);
       camera.lookAt(0, 1.5, -roomSettings.length * 0.4);
     }
@@ -482,7 +491,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
     camera.position.set(x, y, z);
     camera.lookAt(orbit.target);
+    requestRender.current();
   }, []);
+
+  useEffect(() => {
+    requestRender.current();
+  }, [roomSettings, lighting, furniture, selectedFurnitureId, viewMode, cutawayFrontWall]);
 
   // ---------------------------------------------------------------
   // 7. MOUSE & DRAG INTERACTION HANDLERS
@@ -490,6 +504,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!threeRef.current || !containerRef.current) return;
     const orbit = orbitRef.current;
+    e.currentTarget.setPointerCapture(e.pointerId);
     orbit.startX = e.clientX;
     orbit.startY = e.clientY;
 
@@ -499,6 +514,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
 
     const { raycaster, camera, furnitureGroup, groundPlane } = threeRef.current;
     raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+    if (viewMode === 'first-person') {
+      orbit.isOrbiting = true;
+      return;
+    }
 
     // Left click checks for furniture hit
     if (e.button === 0) {
@@ -513,6 +532,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         if (hitObj && hitObj.userData?.id) {
           const hitId = hitObj.userData.id;
           onSelectFurniture(hitId);
+          onEditStart();
           orbit.isDraggingItem = true;
           orbit.dragItemId = hitId;
 
@@ -566,18 +586,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           rawZ = Math.round(rawZ / gridSnap) * gridSnap;
         }
 
-        // Clamp inside room boundary
-        const halfW = roomSettings.width / 2 - 0.3;
-        const halfL = roomSettings.length / 2 - 0.3;
-        const clampedX = Math.max(-halfW, Math.min(halfW, rawX));
-        const clampedZ = Math.max(-halfL, Math.min(halfL, rawZ));
-
         const targetItem = furniture.find((f) => f.id === orbit.dragItemId);
-        if (targetItem && (targetItem.x !== clampedX || targetItem.z !== clampedZ)) {
+        if (targetItem && (targetItem.x !== rawX || targetItem.z !== rawZ)) {
           onUpdateFurniture({
             ...targetItem,
-            x: clampedX,
-            z: clampedZ,
+            x: rawX,
+            z: rawZ,
           });
         }
       }
@@ -630,6 +644,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       camera.rotation.y -= deltaX * 0.003;
       camera.rotation.x -= deltaY * 0.003;
       camera.rotation.x = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, camera.rotation.x));
+      requestRender.current();
     }
   };
 
@@ -652,10 +667,15 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   // Keyboard navigation for first-person mode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (runtimeRef.current.viewMode !== 'first-person' || (e.target as HTMLElement).closest('input, textarea, select, [contenteditable="true"]') || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) return;
+      e.preventDefault();
       orbitRef.current.keysPressed[e.code] = true;
+      requestRender.current();
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       orbitRef.current.keysPressed[e.code] = false;
+      requestRender.current();
     };
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
@@ -703,12 +723,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         dropZ = Math.round(dropZ / gridSnap) * gridSnap;
       }
 
-      const halfW = roomSettings.width / 2 - 0.4;
-      const halfL = roomSettings.length / 2 - 0.4;
-      const clampedX = Math.max(-halfW, Math.min(halfW, dropX));
-      const clampedZ = Math.max(-halfL, Math.min(halfL, dropZ));
-
-      onDropNewItem(catalogId, clampedX, clampedZ);
+      onDropNewItem(catalogId, dropX, dropZ);
     }
   };
 
@@ -725,6 +740,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        style={{ touchAction: 'none' }}
         onWheel={handleWheel}
         onContextMenu={(e) => e.preventDefault()}
         className="block w-full h-full"

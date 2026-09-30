@@ -4,6 +4,11 @@ import { FloorMaterialType, WallTextureType } from '../types/room';
 // Texture cache so we don't recreate canvases repeatedly
 const textureCache = new Map<string, THREE.CanvasTexture>();
 
+export function clearTextureCache(): void {
+  for (const texture of textureCache.values()) texture.dispose();
+  textureCache.clear();
+}
+
 /**
  * Procedural Oak Wood Plank Texture
  */

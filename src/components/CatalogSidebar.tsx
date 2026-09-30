@@ -115,7 +115,7 @@ export const CatalogSidebar: React.FC<CatalogSidebarProps> = ({
 
   return (
     <aside
-      className={`relative z-20 flex flex-col bg-neutral-900/95 border-r border-neutral-800 backdrop-blur-md transition-all duration-300 ${
+      className={`absolute inset-y-0 left-0 z-30 flex max-w-[calc(100vw-1rem)] flex-col bg-neutral-900 border-r border-neutral-800 backdrop-blur-md lg:relative lg:z-20 lg:max-w-none ${
         isOpen ? 'w-80 min-w-80' : 'w-0 min-w-0 border-none'
       }`}
     >
@@ -123,7 +123,7 @@ export const CatalogSidebar: React.FC<CatalogSidebarProps> = ({
       <button
         onClick={onToggleOpen}
         title={isOpen ? 'Collapse Catalog' : 'Open Furniture Catalog'}
-        className="absolute -right-3.5 top-6 z-30 flex items-center justify-center w-7 h-7 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded-full border border-neutral-700 shadow-lg cursor-pointer transition-colors"
+        className="absolute -right-3.5 top-6 z-30 hidden items-center justify-center w-7 h-7 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded-full border border-neutral-700 shadow-lg cursor-pointer transition-colors lg:flex"
       >
         {isOpen ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
       </button>
